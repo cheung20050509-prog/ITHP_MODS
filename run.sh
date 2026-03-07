@@ -8,7 +8,7 @@ EPOCHS=${2:-30}
 BATCH_SIZE=${3:-32}
 
 # 激活conda环境
-source ~/anaconda3/etc/profile.d/conda.sh
+source /home/anaconda/etc/profile.d/conda.sh
 conda activate ITHP
 
 # 切换到脚本所在目录

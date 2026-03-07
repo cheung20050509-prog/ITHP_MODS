@@ -34,16 +34,8 @@ class CapsuleLayer(nn.Module):
         """
         batch_size, seq_len, _ = x.shape
         
-        # 计算所有胶囊: [batch, seq_len, num_nodes, output_dim]
-        # x: [batch, seq_len, input_dim] -> [batch, seq_len, 1, input_dim]
-        x_expanded = x.unsqueeze(2)
-        # W: [num_nodes, input_dim, output_dim] -> [1, 1, num_nodes, input_dim, output_dim]
-        W_expanded = self.W.unsqueeze(0).unsqueeze(0)
-        # capsules: [batch, seq_len, num_nodes, output_dim]
-        capsules = torch.einsum('bsni,njio->bsno', x_expanded.expand(-1, -1, self.num_nodes, -1), 
-                                W_expanded.expand(batch_size, seq_len, -1, -1, -1))
-        
         # 简化计算：直接矩阵乘法
+        # W: [num_nodes, input_dim, output_dim] -> [input_dim, num_nodes * output_dim]
         # [batch, seq_len, input_dim] @ [input_dim, num_nodes * output_dim]
         capsules = x @ self.W.permute(1, 0, 2).reshape(self.input_dim, -1)
         capsules = capsules.view(batch_size, seq_len, self.num_nodes, self.output_dim)
