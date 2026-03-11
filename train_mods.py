@@ -17,7 +17,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
-from torch.nn import MSELoss, L1Loss
+from torch.nn import MSELoss
 
 from transformers import get_linear_schedule_with_warmup, DebertaV2Tokenizer
 from torch.optim import AdamW
@@ -235,6 +235,32 @@ def prep_for_training(num_train_optimization_steps: int):
     return model, optimizer, scheduler
 
 
+def compute_infonce_loss(nce_extras, temperature=0.07):
+    """
+    InfoNCE loss (Eq.20-22).
+    Measures how well h_p can predict each unimodal vector h_m via reverse projection F_m.
+    Temperature scaling ensures stable gradients with small batch sizes.
+    """
+    h_p = nce_extras['h_p']      # [B, D]
+    modality_keys = [('h_a', 'F_a'), ('h_l', 'F_l'), ('h_v', 'F_v')]
+    
+    total_nce = h_p.new_tensor(0.0)
+    for h_key, f_key in modality_keys:
+        h_m = nce_extras[h_key]          # [B, D]
+        F_m = nce_extras[f_key]          # nn.Linear
+        
+        h_m_norm = F.normalize(h_m, dim=-1)
+        f_hp_norm = F.normalize(F_m(h_p), dim=-1)
+        
+        # cosine similarity with temperature scaling
+        sim_matrix = torch.mm(h_m_norm, f_hp_norm.t()) / temperature  # [B, B]
+        
+        labels = torch.arange(h_p.size(0), device=h_p.device)
+        total_nce = total_nce + F.cross_entropy(sim_matrix, labels)
+    
+    return total_nce / 3.0  # average over 3 modalities
+
+
 def train_epoch(model: nn.Module, train_dataloader: DataLoader, optimizer, scheduler):
     model.train()
     tr_loss = 0
@@ -246,15 +272,19 @@ def train_epoch(model: nn.Module, train_dataloader: DataLoader, optimizer, sched
         visual = torch.squeeze(visual, 1)
         acoustic = torch.squeeze(acoustic, 1)
 
-        # 归一化
         visual_norm = (visual - visual.min()) / (visual.max() - visual.min() + 1e-8)
         acoustic_norm = (acoustic - acoustic.min()) / (acoustic.max() - acoustic.min() + 1e-8)
         
-        logits, weights, primary_idx = model(input_ids, visual_norm, acoustic_norm)
+        logits, weights, primary_idx, nce_extras = model(input_ids, visual_norm, acoustic_norm)
         
-        # MAE Loss (论文使用MAE作为主损失)
-        loss_fct = L1Loss()
-        loss = loss_fct(logits.view(-1), label_ids.view(-1))
+        # L_reg: MAE loss (Eq.24)
+        loss_reg = F.l1_loss(logits.view(-1), label_ids.view(-1))
+        
+        # L_NCE: InfoNCE loss (Eq.22)
+        loss_nce = compute_infonce_loss(nce_extras) if nce_extras is not None else 0.0
+        
+        # L_task = L_reg + alpha * L_NCE (Eq.25)
+        loss = loss_reg + args.alpha_nce * loss_nce
 
         if args.gradient_accumulation_step > 1:
             loss = loss / args.gradient_accumulation_step
@@ -287,10 +317,9 @@ def eval_epoch(model: nn.Module, dev_dataloader: DataLoader):
             visual_norm = (visual - visual.min()) / (visual.max() - visual.min() + 1e-8)
             acoustic_norm = (acoustic - acoustic.min()) / (acoustic.max() - acoustic.min() + 1e-8)
 
-            logits, weights, primary_idx = model(input_ids, visual_norm, acoustic_norm)
+            logits, weights, primary_idx, _ = model(input_ids, visual_norm, acoustic_norm)
             
-            loss_fct = L1Loss()
-            loss = loss_fct(logits.view(-1), label_ids.view(-1))
+            loss = F.l1_loss(logits.view(-1), label_ids.view(-1))
 
             dev_loss += loss.item()
             nb_dev_steps += 1
@@ -314,7 +343,7 @@ def test_epoch(model: nn.Module, test_dataloader: DataLoader):
             visual_norm = (visual - visual.min()) / (visual.max() - visual.min() + 1e-8)
             acoustic_norm = (acoustic - acoustic.min()) / (acoustic.max() - acoustic.min() + 1e-8)
 
-            logits, weights, primary_idx = model(input_ids, visual_norm, acoustic_norm)
+            logits, weights, primary_idx, _ = model(input_ids, visual_norm, acoustic_norm)
 
             logits = logits.detach().cpu().numpy()
             label_ids = label_ids.detach().cpu().numpy()

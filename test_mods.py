@@ -184,7 +184,7 @@ def test_epoch(model: nn.Module, test_dataloader: DataLoader):
             visual_norm = (visual - visual.min()) / (visual.max() - visual.min() + 1e-8)
             acoustic_norm = (acoustic - acoustic.min()) / (acoustic.max() - acoustic.min() + 1e-8)
 
-            logits, weights, primary_idx = model(input_ids, visual_norm, acoustic_norm)
+            logits, weights, primary_idx, _ = model(input_ids, visual_norm, acoustic_norm)
 
             logits = logits.detach().cpu().numpy()
             label_ids = label_ids.detach().cpu().numpy()
