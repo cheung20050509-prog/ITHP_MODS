@@ -47,6 +47,7 @@ parser.add_argument("--num_routing", type=int, default=3, help="胶囊网络动�
 parser.add_argument("--num_pcca_layers", type=int, default=3, help="PCCA层数")
 parser.add_argument("--num_attention_heads", type=int, default=4, help="注意力头数")
 parser.add_argument("--alpha_nce", type=float, default=0.1, help="InfoNCE损失系数")
+parser.add_argument("--checkpoint_dir", type=str, default="checkpoints", help="Checkpoint保存目录")
 
 args = parser.parse_args()
 
@@ -362,6 +363,10 @@ def train(model, train_dataloader, validation_dataloader, test_data_loader, opti
     best_valid_loss = float('inf')
     best_test_results = None
     
+    # 创建 checkpoint 目录
+    os.makedirs(args.checkpoint_dir, exist_ok=True)
+    checkpoint_path = os.path.join(args.checkpoint_dir, f"mods_{args.dataset}_best.pt")
+    
     for epoch_i in range(int(args.n_epochs)):
         train_loss = train_epoch(model, train_dataloader, optimizer, scheduler)
         valid_loss = eval_epoch(model, validation_dataloader)
@@ -380,6 +385,16 @@ def train(model, train_dataloader, validation_dataloader, test_data_loader, opti
             if valid_loss < best_valid_loss:
                 best_valid_loss = valid_loss
                 best_test_results = (test_acc2, test_acc7, test_mae, test_corr, test_f1)
+                # 保存最佳模型
+                torch.save({
+                    'epoch': epoch_i + 1,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'valid_loss': valid_loss,
+                    'test_results': best_test_results,
+                    'args': args,
+                }, checkpoint_path)
+                print(f"  >> Best model saved to {checkpoint_path}")
     
     print("\n" + "="*60)
     print("Final Best Results:")
